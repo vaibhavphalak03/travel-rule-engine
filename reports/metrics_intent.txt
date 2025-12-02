@@ -1,0 +1,26 @@
+                              precision    recall  f1-score   support
+
+          blackout_exclusion       1.00      1.00      1.00        11
+  blackout_min_stay_conflict       1.00      1.00      1.00         9
+     booking_window_discount       1.00      1.00      1.00         7
+       bundle_combo_discount       1.00      1.00      1.00        12
+         cancellation_policy       1.00      1.00      1.00        11
+        child_infant_pricing       0.00      0.00      0.00         9
+      group_booking_discount       0.20      0.09      0.12        11
+       insurance_requirement       0.19      0.70      0.30        10
+            loyalty_discount       1.00      1.00      1.00        10
+             manual_override       1.00      0.11      0.20         9
+               min_stay_perk       1.00      1.00      1.00         9
+    payment_method_incentive       0.20      0.10      0.13        10
+          price_match_policy       1.00      1.00      1.00        11
+      product_class_discount       0.20      0.10      0.13        10
+        promo_cap_precedence       0.00      0.00      0.00         7
+      promo_code_eligibility       0.33      0.11      0.17         9
+ require_docs_by_destination       0.33      0.40      0.36        10
+             seasonal_markup       0.50      0.09      0.15        11
+supplier_commission_override       0.26      0.64      0.38        14
+                tax_override       0.27      0.30      0.29        10
+
+                    accuracy                           0.55       200
+                   macro avg       0.57      0.53      0.51       200
+                weighted avg       0.58      0.55      0.52       200

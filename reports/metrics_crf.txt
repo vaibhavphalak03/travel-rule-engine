@@ -1,0 +1,14 @@
+                precision    recall  f1-score   support
+
+        B-DATE       0.00      0.00      0.00       186
+B-DISCOUNT_PCT       0.00      0.00      0.00       804
+         B-ORG       0.00      0.00      0.00        12
+        B-TIME       0.00      0.00      0.00        52
+        I-DATE       0.05      1.00      0.10       559
+I-DISCOUNT_PCT       0.00      0.00      0.00       804
+        I-TIME       0.00      0.00      0.00        52
+             O       0.00      0.00      0.00      9439
+
+      accuracy                           0.05     11908
+     macro avg       0.01      0.12      0.01     11908
+  weighted avg       0.00      0.05      0.00     11908

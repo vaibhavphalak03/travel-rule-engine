@@ -1,0 +1,66 @@
+[
+  {
+    "rule_id": "policy_001",
+    "name": "cheapest_direct_required",
+    "conditions": [
+      { "attribute": "is_cheapest_direct", "operator": "==", "value": false }
+    ],
+    "actions": [
+      { "action": "mark_out_of_policy" }
+    ],
+    "priority": 1,
+    "meta": { "source": "examples" }
+  },
+  {
+    "rule_id": "policy_002",
+    "name": "no_business_short_flights",
+    "conditions": [
+      { "attribute": "flight_duration_hours", "operator": "<", "value": 4 },
+      { "attribute": "cabin_class", "operator": "==", "value": "business" }
+    ],
+    "actions": [
+      { "action": "mark_out_of_policy" }
+    ],
+    "priority": 1,
+    "meta": { "source": "examples" }
+  },
+  {
+    "rule_id": "policy_003",
+    "name": "advance_booking_required",
+    "conditions": [
+      { "attribute": "booking_window_days", "operator": "<", "value": 14 },
+      { "attribute": "manager_approval", "operator": "==", "value": false }
+    ],
+    "actions": [
+      { "action": "mark_out_of_policy" }
+    ],
+    "priority": 1,
+    "meta": { "source": "examples" }
+  },
+  {
+    "rule_id": "policy_004",
+    "name": "hotel_limit_policy",
+    "conditions": [
+      { "attribute": "hotel_star_rating", "operator": ">", "value": 3 },
+      { "attribute": "manager_approval", "operator": "==", "value": false }
+    ],
+    "actions": [
+      { "action": "mark_out_of_policy" }
+    ],
+    "priority": 1,
+    "meta": { "source": "examples" }
+  },
+  {
+    "rule_id": "policy_005",
+    "name": "must_take_direct_when_available",
+    "conditions": [
+      { "attribute": "direct_flight_available", "operator": "==", "value": true },
+      { "attribute": "is_direct_flight", "operator": "==", "value": false }
+    ],
+    "actions": [
+      { "action": "mark_out_of_policy" }
+    ],
+    "priority": 1,
+    "meta": { "source": "examples" }
+  }
+]
