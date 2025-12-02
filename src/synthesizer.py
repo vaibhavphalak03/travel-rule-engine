@@ -1,175 +1,264 @@
 # src/synthesizer.py
 """
-End-to-end NL → JSON Rule Synthesizer
-Uses: intent model + CRF model + slot post-processing + templates
+Synthesizer module — robust loader + fallback.
+
+Features:
+- Tries to find model files under models/ with flexible names:
+  intent_clf.joblib | intent_clf.pkl | intent_clf.model ...
+  crf_model.joblib | crf_model.pkl ...
+- Loads models using joblib if available and safe.
+- If model loading fails, falls back to a deterministic NL->slots extractor
+  so the UI and DSL output keep working reliably.
+- Produces a JSON DSL rule structure compatible with the Streamlit UI:
+  {"intent": ..., "slots": {...}, "rule": {...}}
+- Uses timezone-aware datetimes.
 """
 
-import joblib
-import spacy
 from pathlib import Path
-from src.entity_patterns import PATTERNS
-from src.postprocess_slots import bio_to_spans, normalize_span_to_attr
-import json
 from datetime import datetime, timezone
+import re
+import logging
 
-ROOT = Path(__file__).resolve().parents[1]
-INTENT_MODEL = ROOT / "models" / "intent_clf.pkl"
-CRF_MODEL = ROOT / "models" / "crf_model.pkl"
-OUT_DIR = ROOT / "outputs"
-OUT_DIR.mkdir(exist_ok=True)
+LOG = logging.getLogger(__name__)
 
-# Load models (will raise if missing)
-intent_clf = joblib.load(INTENT_MODEL)
-crf = joblib.load(CRF_MODEL)
+# --- Flexible model discovery ---
+MODELS_DIR = Path("models")
 
-def load_nlp():
+_INTENT_CANDIDATES = [
+    "intent_clf.joblib",
+    "intent_clf.pkl",
+    "intent_clf.model",
+    "intent_clf"
+]
+_CRF_CANDIDATES = [
+    "crf_model.joblib",
+    "crf_model.pkl",
+    "crf_model.model",
+    "crf_model"
+]
+
+
+def _find_model_file(candidates):
+    for name in candidates:
+        p = MODELS_DIR / name
+        if p.exists():
+            return p
+    return None
+
+
+INTENT_MODEL = _find_model_file(_INTENT_CANDIDATES)
+CRF_MODEL = _find_model_file(_CRF_CANDIDATES)
+
+# --- Try import joblib (optional) ---
+try:
+    import joblib
+except Exception:
+    joblib = None
+    LOG.warning("joblib not available; model loading via joblib disabled.")
+
+
+def _try_load_model(path):
+    """
+    Safely attempt to load a model by path using joblib.
+    Returns the loaded object or None on failure / missing.
+    """
+    if path is None:
+        LOG.debug("No model candidate provided.")
+        return None
+    if joblib is None:
+        LOG.warning("joblib not installed; cannot load model %s", path)
+        return None
     try:
-        nlp = spacy.load("en_core_web_sm")
-    except:
-        nlp = spacy.blank("en")
-    # ensure entity ruler exists
-    if "entity_ruler" not in nlp.pipe_names:
-        ruler = nlp.add_pipe("entity_ruler")
-        ruler.add_patterns(PATTERNS)
-    return nlp
+        m = joblib.load(path)
+        LOG.info("Loaded model from %s", path)
+        return m
+    except Exception as e:
+        LOG.warning("Failed loading model %s: %s", path, e)
+        return None
 
-nlp = load_nlp()
 
-def extract_slots(text):
-    doc = nlp(text)
-    tokens = [t.text for t in doc]
+# Attempt to load models (may be None)
+intent_clf = _try_load_model(INTENT_MODEL)
+crf_model = _try_load_model(CRF_MODEL)
 
-    # Convert tokens → CRF feature format
-    def word2features(sent, i):
-        w = sent[i]
-        f = {
-            "bias": 1.0,
-            "word.lower()": w.lower(),
-            "word.isupper()": w.isupper(),
-            "word.istitle()": w.istitle(),
-            "word.isdigit()": w.isdigit(),
-            "suffix(3)": w[-3:],
-            "prefix(3)": w[:3]
-        }
-        if i > 0:
-            prev = sent[i-1]
-            f["-1:word.lower()"] = prev.lower()
-        else:
-            f["BOS"] = True
 
-        if i < len(sent)-1:
-            nxt = sent[i+1]
-            f["+1:word.lower()"] = nxt.lower()
-        else:
-            f["EOS"] = True
+# ----------------------------
+# Deterministic fallback extractor
+# ----------------------------
+_pct_re = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
+_days_re = re.compile(r"(\d{1,4})\s*(?:days|day|d)\b", re.I)
+_product_re = re.compile(r"\b(flight|flights|hotel|hotels|car|cars|package|packages|insurance|visa)\b", re.I)
+_price_match_re = re.compile(r"(price match|price-match|match price|match the price|price match policy)", re.I)
+_min_stay_re = re.compile(r"(\d+)\s*(?:nights|night)", re.I)
 
-        return f
 
-    X = [word2features(tokens, i) for i in range(len(tokens))]
-    tags = crf.predict([X])[0]
+def _fallback_extract(text):
+    """
+    Simple rule-based slot extractor. Returns dict of slots.
+    """
+    slots = {}
+    t = text or ""
+    m = _pct_re.search(t)
+    if m:
+        try:
+            slots["discount_pct"] = float(m.group(1))
+        except Exception:
+            pass
 
-    spans = bio_to_spans(tokens, tags)
-    attributes = {}
+    m = _days_re.search(t)
+    if m:
+        try:
+            slots["booking_window_days"] = int(m.group(1))
+        except Exception:
+            pass
 
-    for lbl, txt, _, _ in spans:
-        attr, val = normalize_span_to_attr(lbl, txt)
-        attributes[attr] = val
+    m = _product_re.search(t)
+    if m:
+        p = m.group(1).lower()
+        if p.endswith("s"):
+            p = p[:-1]
+        slots["product_type"] = p
 
-    return tokens, tags, attributes
+    if _price_match_re.search(t):
+        slots["price_match_requested"] = True
 
-def synthesize_rule(text):
-    # predict intent
-    intent = intent_clf.predict([text])[0]
+    m = _min_stay_re.search(t)
+    if m:
+        try:
+            slots["min_stay_nights"] = int(m.group(1))
+        except Exception:
+            pass
 
-    # extract slots
-    tokens, tags, attrs = extract_slots(text)
+    return slots
 
-    # build JSON rule using recognized template
-    rule_json = {
+
+# ----------------------------
+# Build DSL JSON
+# ----------------------------
+def _build_rule_from_intent(intent, slots):
+    rule = {
         "rule_id": f"rule_{int(datetime.now(timezone.utc).timestamp())}",
-        "name": intent,
+        "name": intent or "generated_rule",
         "conditions": [],
         "actions": [],
         "priority": 1,
         "meta": {
-            "source": "user_nl",
+            "source": "user_nl" if intent else "fallback_nl",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
     }
 
-    # ---------------------------
-    # Auto-detect product type from NL text
-    # ---------------------------
-    nl_lower = text.lower() if isinstance(text, str) else ""
-    product_keywords = {
-        "flight": ["flight", "flights", "airfare", "air ticket", "air-ticket", "departure", "return flight"],
-        "hotel": ["hotel", "hotels", "stay", "room", "rooms", "accommodation"],
-        "car": ["car", "cars", "self-hire", "self hire", "car hire", "rental car", "taxi"],
-        "package": ["package", "holiday package", "tour", "vacation package"],
-        "insurance": ["insurance", "travel insurance", "policy"],
-        "visa": ["visa", "visa service", "visa services"]
-    }
+    if "product_type" in slots:
+        rule["conditions"].append({
+            "attribute": "product_type",
+            "operator": "==",
+            "value": slots["product_type"]
+        })
 
-    detected_product = None
-    for ptype, keywords in product_keywords.items():
-        for kw in keywords:
-            if kw in nl_lower:
-                detected_product = ptype
-                break
-        if detected_product:
-            break
+    if "booking_window_days" in slots:
+        rule["conditions"].append({
+            "attribute": "booking_window_days",
+            "operator": ">=",
+            "value": int(slots["booking_window_days"])
+        })
 
-    # If product detected and not already present in conditions, add condition
-    if detected_product:
-        already = any(
-            (cond.get("attribute") == "product_type") or
-            (cond.get("attribute") == "product" )
-            for cond in rule_json.get("conditions", [])
-        )
-        if not already:
-            rule_json["conditions"].append({
-                "attribute": "product_type",
-                "operator": "==",
-                "value": detected_product
-            })
+    if "min_stay_nights" in slots:
+        rule["conditions"].append({
+            "attribute": "min_stay_days",
+            "operator": ">=",
+            "value": int(slots["min_stay_nights"])
+        })
 
-    # ---------------------------
-    # Convert any extracted attrs into conditions (if your downstream logic expects this)
-    # ---------------------------
-    # Example: if extract_slots returned attrs like {"booking_window_days": 45, "discount_pct": 10}
-    # we convert numeric attrs into rule conditions where appropriate.
-    # Adjust this mapping to your actual extractor's output shape.
-    if isinstance(attrs, dict):
-        # common numeric conditions
-        if "booking_window_days" in attrs:
-            rule_json["conditions"].append({
-                "attribute": "booking_window_days",
-                "operator": ">=",
-                "value": int(attrs["booking_window_days"])
-            })
-        # (you can add other mappings here as needed)
-        # note: do not add discount_pct as condition; it is usually used in actions
-    # ---------------------------
+    if slots.get("price_match_requested"):
+        rule["actions"].append({
+            "action": "price_match_check",
+            "params": {}
+        })
 
-    # Build actions using slots/attrs if available
-    # (keep your existing action-building logic; example below shows a common pattern)
-    if isinstance(attrs, dict):
-        if "discount_pct" in attrs:
-            rule_json["actions"].append({
-                "action": "apply_discount",
-                "params": {"value": float(attrs["discount_pct"]), "type": "percent"}
-            })
+    if "discount_pct" in slots:
+        rule["actions"].append({
+            "action": "apply_discount",
+            "params": {"value": float(slots["discount_pct"]), "type": "percent"}
+        })
 
-    # final return: include intent and slots for UI clarity
-    out = {
-        "intent": intent,
-        "slots": attrs if isinstance(attrs, dict) else {},
-        "rule": rule_json
-    }
-    return out
+    if not rule["actions"]:
+        rule["actions"].append({"action": "no_action"})
+
+    return rule
 
 
-if __name__ == "__main__":
-    text = "Give 10% discount on flights booked 30 days before travel."
-    out = synthesize_rule(text)
-    print(json.dumps(out, indent=2))
+# ----------------------------
+# Public API: synthesize_rule
+# ----------------------------
+def synthesize_rule(text):
+    """
+    Main function expected by the UI.
+    Returns: {"intent": str, "slots": dict, "rule": dict}
+    """
+    text = (text or "").strip()
+    if not text:
+        empty_slots = {}
+        empty_rule = _build_rule_from_intent("empty_rule", empty_slots)
+        return {"intent": "empty_rule", "slots": empty_slots, "rule": empty_rule}
+
+    # 1) Try ML intent prediction (if available)
+    intent = None
+    if intent_clf is not None:
+        try:
+            # intent_clf expected to accept list-like input
+            pred = intent_clf.predict([text])
+            if hasattr(pred, "__iter__"):
+                intent = pred[0]
+            else:
+                intent = pred
+        except Exception as e:
+            LOG.warning("intent_clf.predict failed: %s", e)
+            intent = None
+
+    # 2) Try CRF for BIO tags -> convert to slots (best-effort)
+    slots = {}
+    if crf_model is not None:
+        try:
+            tokens = text.split()
+            tags = crf_model.predict([tokens])[0]
+            # simple heuristic: look for DISCOUNT/DATE tags
+            for i, tag in enumerate(tags):
+                tok = tokens[i] if i < len(tokens) else ""
+                if "DISCOUNT" in tag or "DISCOUNT_PCT" in tag:
+                    # attempt to parse numeric from nearby tokens
+                    num_match = re.search(r"(\d{1,3}(?:\.\d+)?)", tok)
+                    if num_match:
+                        try:
+                            slots["discount_pct"] = float(num_match.group(1))
+                        except Exception:
+                            pass
+                if "DATE" in tag or "DATE" in tag:
+                    # naive: get numeric token nearby
+                    num_match = re.search(r"(\d{1,4})", tok)
+                    if num_match:
+                        try:
+                            slots["booking_window_days"] = int(num_match.group(1))
+                        except Exception:
+                            pass
+        except Exception as e:
+            LOG.warning("CRF predict failed: %s", e)
+
+    # 3) If CRF produced nothing, apply fallback extractor
+    if not slots:
+        slots = _fallback_extract(text)
+
+    # 4) If no intent from ML, infer heuristically
+    if not intent:
+        t = text.lower()
+        if "discount" in t or "%" in t:
+            intent = "booking_window_discount"
+        elif "no discounts" in t or "no discount" in t:
+            intent = "blackout_min_stay_conflict"
+        elif "price match" in t or "match price" in t:
+            intent = "price_match_policy"
+        else:
+            intent = "generic_rule"
+
+    # 5) Build final rule JSON
+    rule = _build_rule_from_intent(intent, slots)
+    return {"intent": intent, "slots": slots, "rule": rule}
