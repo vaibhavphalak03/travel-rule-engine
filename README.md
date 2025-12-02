@@ -7,85 +7,84 @@ A complete end-to-end system that converts natural-language travel rules into ma
 
 Example input: “Give 10% discount on flights booked 30 days before travel.”
 
-Produces structured DSL rule:
+- Produces structured DSL rule:
 
-conditions
+- conditions
 
-actions
+- actions
 
-priority
+- priority
 
-metadata
+- metadata
 
-Automatically adds product filters (flight/hotel/car/etc.).
+- Automatically adds product filters (flight/hotel/car/etc.).
 
-Slot extraction + intent prediction included.
+- Slot extraction + intent prediction included.
 
 ✅ 2. Attribute-Based Rule Builder UI
 
-35 travel parameters (flight, hotel, car, insurance, visa, package).
+- 35 travel parameters (flight, hotel, car, insurance, visa, package).
 
-Dropdowns + number/date inputs.
+- Dropdowns + number/date inputs.
 
-Auto-generates JSON rules.
+- Auto-generates JSON rules.
 
-Execute rules instantly on payload.
+- Execute rules instantly on payload.
 
 ✅ 3. Travel Policy Validation System
 
-Supports policies like:
+- Supports policies like:
 
-not_cheapest_direct
+- not_cheapest_direct
 
-no_luxury_hotel_for_juniors
+- no_luxury_hotel_for_juniors
 
-UI displays:
+- UI displays:
 
-IN POLICY / OUT OF POLICY
+- IN POLICY / OUT OF POLICY
 
 ✅ 4. ZenRules-Style Execution Engine
 
-Evaluates rule conditions.
+- Evaluates rule conditions.
 
-Applies actions (discount, override price).
+- Applies actions (discount, override price).
 
-Shows failure reasons.
+- Shows failure reasons.
 
-Gives human-friendly explanation.
+- Gives human-friendly explanation.
 
-Outputs final payload.
+- Outputs final payload.
 
 ✅ 5. Machine Learning Components
 
-CRF BIO tagger for slot extraction
+- CRF BIO tagger for slot extraction
 
-Logistic Regression for intent classification
+- Logistic Regression for intent classification
 
-Synthetic dataset powered by LLMs
+- Synthetic dataset powered by LLMs
 
-Evaluation notebook includes:
+- Evaluation notebook includes:
 
-Precision
+- Precision
 
-Recall
+- Recall
 
-F1 Score
+- F1 Score
 
-Confusion Matrix
+- Confusion Matrix
 
 ✅ 6. Streamlit UIs (2 Apps)
 
-NL → JSON Generator — streamlit_app.py
+- NL → JSON Generator — streamlit_app.py
 
-Attribute Rule Builder — attribute_generator.py
+- Attribute Rule Builder — attribute_generator.py
 
 ✅ 7. Pytest Testing Suite
 
-test_synthesizer.py
+- test_synthesizer.py
 
-test_executor.py
+- test_executor.py
 
-🏗️ Project Structure
 travel-rule-project/
 │
 ├── src/
@@ -117,6 +116,7 @@ travel-rule-project/
 ├── README.md
 └── requirements.txt
 
+
 🧪 How to Run the Project
 1️⃣ Create & activate virtual environment
 python -m venv .venv
@@ -139,58 +139,58 @@ Step 1 — Slot Extraction (CRF)
 
 Extracts:
 
-discount_percent
+- discount_percent
 
-date expressions
+- date expressions
 
-booking window duration
+- booking window duration
 
-product category
+- product category
 
-conditions
+- conditions
 
 Step 2 — Intent Prediction
 
-Uses Logistic Regression to classify:
+- Uses Logistic Regression to classify:
 
-booking_window_discount
+- booking_window_discount
 
 loyalty_discount
 
-blackout_conflict
+- blackout_conflict
 
-price_match_policy
+- price_match_policy
 
-seasonal_markup
+- seasonal_markup
 and 15+ more.
 
 Step 3 — JSON Rule Creation
 
 Automatically builds:
 
-conditions
+- conditions
 
-action list
+- action list
 
-priority
+- priority
 
-metadata
+- metadata
 
-rule_id
+- rule_id
 
 Step 4 — Rule Execution
 
-Engine outputs:
+- Engine outputs:
 
-matched / not matched
+- matched / not matched
 
-failed condition
+- failed condition
 
-applied actions
+- applied actions
 
-updated payload
+- updated payload
 
-explanation text
+- explanation text
 
 Step 5 — Policy Check
 
@@ -204,27 +204,27 @@ OUT OF POLICY ✖
 
 From model_evaluation.ipynb:
 
-CRF performs strongly for structured BIO slot tagging.
+- CRF performs strongly for structured BIO slot tagging.
 
-Intent model reached ~55% accuracy on 20-class synthetic dataset.
+- Intent model reached ~55% accuracy on 20-class synthetic dataset.
 
-More data can increase accuracy further.
+- More data can increase accuracy further.
 
-All evaluation metrics included.
+- All evaluation metrics included.
 
 🔥 Future Improvements
 
-Price-match with screenshot/proof validation
+- Price-match with screenshot/proof validation
 
-Transformer-based NER
+- Transformer-based NER
 
-Rule conflict detection
+- Rule conflict detection
 
-Multi-rule chain execution
+- Multi-rule chain execution
 
-Version control for rule changes
+- Version control for rule changes
 
-Visual payload diff view
+- Visual payload diff view
 
 👨‍💻 Developer
 
