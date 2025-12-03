@@ -1,5 +1,5 @@
 # src/synthesizer.py
-<<<<<<< HEAD
+
 import re
 import joblib
 import json
@@ -195,7 +195,7 @@ def synthesize_rule(text: str):
     # price-match condition enhancement
     _proof_words_re = re.compile(r"\b(proof|evidence|screenshot|photo|image|url|link)\b", re.I)
     _competitor_words_re = re.compile(r"\b(competitor|competitors|cheaper|lower price|lower than us|lower than)\b", re.I)
-=======
+
 """
 Synthesizer module — robust loader + fallback.
 
@@ -382,7 +382,7 @@ def _build_rule_from_intent(intent, slots):
         rule["actions"].append({"action": "no_action"})
 
     return rule
->>>>>>> 84a5b8cc618bddeb289389119d320288152b1f28
+
 
     # decide price-match condition (improve rule)
     price_match_condition = None
@@ -406,8 +406,7 @@ def _build_rule_from_intent(intent, slots):
         # add the action (unchanged)
         rule["actions"].append({"action": "price_match_check", "params": {}})
 
-<<<<<<< HEAD
-=======
+
 # ----------------------------
 # Public API: synthesize_rule
 # ----------------------------
@@ -483,4 +482,4 @@ def synthesize_rule(text):
     # 5) Build final rule JSON
     rule = _build_rule_from_intent(intent, slots)
     return {"intent": intent, "slots": slots, "rule": rule}
->>>>>>> 84a5b8cc618bddeb289389119d320288152b1f28
+
