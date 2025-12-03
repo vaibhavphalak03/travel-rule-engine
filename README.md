@@ -223,8 +223,21 @@ From model_evaluation.ipynb:
 - Multi-rule chain execution
 
 - Version control for rule changes
+<<<<<<< HEAD
 
 - Visual payload diff view
+=======
+
+- Visual payload diff view
+
+**Screenshots**
+
+<img width="1919" height="756" alt="nl to json" src="https://github.com/user-attachments/assets/8aaa593b-4d2e-4456-8419-bac74e1c4b6b" />
+
+
+<img width="1882" height="829" alt="image" src="https://github.com/user-attachments/assets/73202e5d-0e5e-4499-9809-af23b6c3106c" />
+
+>>>>>>> 84a5b8cc618bddeb289389119d320288152b1f28
 
 👨‍💻 Developer
 
