@@ -1,175 +1,219 @@
 # src/synthesizer.py
-"""
-End-to-end NL → JSON Rule Synthesizer
-Uses: intent model + CRF model + slot post-processing + templates
-"""
-
+import re
 import joblib
-import spacy
-from pathlib import Path
-from src.entity_patterns import PATTERNS
-from src.postprocess_slots import bio_to_spans, normalize_span_to_attr
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-INTENT_MODEL = ROOT / "models" / "intent_clf.pkl"
-CRF_MODEL = ROOT / "models" / "crf_model.pkl"
-OUT_DIR = ROOT / "outputs"
-OUT_DIR.mkdir(exist_ok=True)
 
-# Load models (will raise if missing)
-intent_clf = joblib.load(INTENT_MODEL)
-crf = joblib.load(CRF_MODEL)
+# Default model paths (adjust if your repo uses different names)
+INTENT_MODEL = ROOT / "models" / "intent_clf.joblib"
+CRF_MODEL = ROOT / "models" / "crf_model.joblib"
 
-def load_nlp():
+# Try to load models once (graceful fallback to None)
+intent_clf = None
+crf_model = None
+
+def _safe_load_model(path):
     try:
-        nlp = spacy.load("en_core_web_sm")
-    except:
-        nlp = spacy.blank("en")
-    # ensure entity ruler exists
-    if "entity_ruler" not in nlp.pipe_names:
-        ruler = nlp.add_pipe("entity_ruler")
-        ruler.add_patterns(PATTERNS)
-    return nlp
+        return joblib.load(str(path))
+    except Exception as e:
+        # don't raise — return None and keep going with fallback heuristics
+        print(f"Failed loading model {path}: {e}")
+        return None
 
-nlp = load_nlp()
+intent_clf = _safe_load_model(INTENT_MODEL) if INTENT_MODEL.exists() else None
+crf_model = _safe_load_model(CRF_MODEL) if CRF_MODEL.exists() else None
 
-def extract_slots(text):
-    doc = nlp(text)
-    tokens = [t.text for t in doc]
+# regex helpers
+_pct_re = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*%")
+_days_re = re.compile(r"(\d{1,4})\s*(?:days|day|nights|night)\b", re.I)
+_fare_re = re.compile(r"\b(economy|premium|business)\b", re.I)
+_product_re = re.compile(r"\b(flight|flights|hotel|hotels|car|cars|package|packages|insurance|visa)\b", re.I)
+_surcharge_re = re.compile(r"\bsurcharge\b", re.I)
+_price_match_re = re.compile(r"price match|match price|price-match", re.I)
 
-    # Convert tokens → CRF feature format
-    def word2features(sent, i):
-        w = sent[i]
-        f = {
-            "bias": 1.0,
-            "word.lower()": w.lower(),
-            "word.isupper()": w.isupper(),
-            "word.istitle()": w.istitle(),
-            "word.isdigit()": w.isdigit(),
-            "suffix(3)": w[-3:],
-            "prefix(3)": w[:3]
+# min-stay / block discount patterns
+_minstay_re = re.compile(
+    r"(?:no discounts|not eligible for discounts|not eligible|no discount)s?\s*(?:for\s+)?(?:stays\s+)?(?:shorter than|less than|under)\s+(\d+)\s*(?:nights|night)",
+    re.I
+)
+_minstay_alt_re = re.compile(r"(?:stays\s+shorter\s+than|stay\s+less\s+than|shorter than)\s+(\d+)\s*(?:nights|night)", re.I)
+
+def _tokens_from_text(text):
+    # simple whitespace/token split, keep punctuation as separate tokens
+    txt = text.replace(",", " , ").replace(".", " . ").replace("/", " / ")
+    return [t for t in txt.split() if t.strip()]
+
+def _safe_crf_predict(tokens):
+    if crf_model is None:
+        return None
+    try:
+        tags = crf_model.predict([tokens])[0]
+        return tags
+    except Exception:
+        return None
+
+def synthesize_rule(text: str):
+    """
+    Convert NL text -> dict with keys: intent, slots, rule
+    Heuristic-first for some patterns (min-stay blocking), then CRF+intent fallback.
+    """
+    text = (text or "").strip()
+
+    # 1) MIN-STAY heuristic (explicitly catch these first)
+    m = _minstay_re.search(text) or _minstay_alt_re.search(text)
+    if m:
+        n = int(m.group(1))
+        rule = {
+            "rule_id": f"rule_{int(datetime.now(timezone.utc).timestamp())}",
+            "name": "min_stay_block_discount",
+            "conditions": [
+                {"attribute": "trip_length_days", "operator": "<", "value": n}
+            ],
+            "actions": [
+                {"action": "block_discount", "params": {}}
+            ],
+            "priority": 1,
+            "meta": {"source": "user_nl", "created_at": datetime.now(timezone.utc).isoformat()}
         }
-        if i > 0:
-            prev = sent[i-1]
-            f["-1:word.lower()"] = prev.lower()
-        else:
-            f["BOS"] = True
+        return {"intent": "min_stay_block", "slots": {"min_stay_days": n}, "rule": rule}
 
-        if i < len(sent)-1:
-            nxt = sent[i+1]
-            f["+1:word.lower()"] = nxt.lower()
-        else:
-            f["EOS"] = True
+    # 2) Attempt to get intent from model
+    intent = None
+    try:
+        if intent_clf is not None:
+            # Some classifiers want a list of strings
+            pred = intent_clf.predict([text])
+            if pred:
+                intent = pred[0]
+    except Exception:
+        intent = None
 
-        return f
+    # 3) Tokenize and CRF tag if available
+    tokens = _tokens_from_text(text)
+    tags = _safe_crf_predict(tokens)
 
-    X = [word2features(tokens, i) for i in range(len(tokens))]
-    tags = crf.predict([X])[0]
+    # 4) Extract slots from tags and regex fallbacks
+    slots = {}
 
-    spans = bio_to_spans(tokens, tags)
-    attributes = {}
+    # discount / percent
+    m_pct = _pct_re.search(text)
+    if m_pct:
+        try:
+            slots["discount_pct"] = float(m_pct.group(1))
+        except:
+            pass
 
-    for lbl, txt, _, _ in spans:
-        attr, val = normalize_span_to_attr(lbl, txt)
-        attributes[attr] = val
+    # booking_window_days (look for "<num> days" near booking/before)
+    # prefer explicit phrases like "booked 30 days before"
+    if "book" in text.lower() or "before travel" in text.lower():
+        m_days = _days_re.search(text)
+        if m_days:
+            try:
+                slots["booking_window_days"] = int(m_days.group(1))
+            except:
+                pass
 
-    return tokens, tags, attributes
+    # fare_class via tags or regex
+    fare = None
+    if tags:
+        for t, tg in zip(tokens, tags):
+            if tg and tg.upper().startswith("B-FARE"):
+                fare = t.lower()
+                break
+    if not fare:
+        m_fare = _fare_re.search(text)
+        if m_fare:
+            fare = m_fare.group(1).lower()
+    if fare:
+        slots["fare_class"] = fare
 
-def synthesize_rule(text):
-    # predict intent
-    intent = intent_clf.predict([text])[0]
+    # product_type
+    product = None
+    if tags:
+        for t, tg in zip(tokens, tags):
+            if tg and tg.upper().startswith("B-PRODUCT"):
+                product = t.lower().rstrip("s")
+                break
+    if not product:
+        m_prod = _product_re.search(text)
+        if m_prod:
+            product = m_prod.group(1).lower().rstrip("s")
+    if product:
+        slots["product_type"] = product
 
-    # extract slots
-    tokens, tags, attrs = extract_slots(text)
+    # price match intent detection (text pattern or intent)
+    price_match_flag = bool(_price_match_re.search(text)) or (intent and "price_match" in str(intent).lower())
 
-    # build JSON rule using recognized template
-    rule_json = {
+    # surcharge detection (keyword or intent)
+    surcharge_flag = bool(_surcharge_re.search(text)) or (intent and "surcharge" in str(intent).lower())
+
+    # 5) Build rule JSON
+    rule = {
         "rule_id": f"rule_{int(datetime.now(timezone.utc).timestamp())}",
-        "name": intent,
+        "name": str(intent) if intent else "generated_rule",
         "conditions": [],
         "actions": [],
         "priority": 1,
-        "meta": {
-            "source": "user_nl",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
+        "meta": {"source": "user_nl", "created_at": datetime.now(timezone.utc).isoformat()}
     }
 
-    # ---------------------------
-    # Auto-detect product type from NL text
-    # ---------------------------
-    nl_lower = text.lower() if isinstance(text, str) else ""
-    product_keywords = {
-        "flight": ["flight", "flights", "airfare", "air ticket", "air-ticket", "departure", "return flight"],
-        "hotel": ["hotel", "hotels", "stay", "room", "rooms", "accommodation"],
-        "car": ["car", "cars", "self-hire", "self hire", "car hire", "rental car", "taxi"],
-        "package": ["package", "holiday package", "tour", "vacation package"],
-        "insurance": ["insurance", "travel insurance", "policy"],
-        "visa": ["visa", "visa service", "visa services"]
-    }
+    # Add product_type condition first if present
+    if slots.get("product_type"):
+        rule["conditions"].append({"attribute": "product_type", "operator": "==", "value": slots["product_type"]})
 
-    detected_product = None
-    for ptype, keywords in product_keywords.items():
-        for kw in keywords:
-            if kw in nl_lower:
-                detected_product = ptype
-                break
-        if detected_product:
-            break
+    # Add fare_class condition
+    if slots.get("fare_class"):
+        rule["conditions"].append({"attribute": "fare_class", "operator": "==", "value": slots["fare_class"]})
 
-    # If product detected and not already present in conditions, add condition
-    if detected_product:
-        already = any(
-            (cond.get("attribute") == "product_type") or
-            (cond.get("attribute") == "product" )
-            for cond in rule_json.get("conditions", [])
-        )
-        if not already:
-            rule_json["conditions"].append({
-                "attribute": "product_type",
-                "operator": "==",
-                "value": detected_product
-            })
+    # booking window
+    if slots.get("booking_window_days"):
+        rule["conditions"].append({"attribute": "booking_window_days", "operator": ">=", "value": int(slots["booking_window_days"])})
 
-    # ---------------------------
-    # Convert any extracted attrs into conditions (if your downstream logic expects this)
-    # ---------------------------
-    # Example: if extract_slots returned attrs like {"booking_window_days": 45, "discount_pct": 10}
-    # we convert numeric attrs into rule conditions where appropriate.
-    # Adjust this mapping to your actual extractor's output shape.
-    if isinstance(attrs, dict):
-        # common numeric conditions
-        if "booking_window_days" in attrs:
-            rule_json["conditions"].append({
-                "attribute": "booking_window_days",
-                "operator": ">=",
-                "value": int(attrs["booking_window_days"])
-            })
-        # (you can add other mappings here as needed)
-        # note: do not add discount_pct as condition; it is usually used in actions
-    # ---------------------------
+    # Decide actions
+    if surcharge_flag:
+        pct = slots.get("discount_pct", None)
+        if pct is None:
+            pct = 10.0
+        rule["actions"].append({"action": "apply_surcharge", "params": {"value": float(pct), "type": "percent"}})
+    elif price_match_flag:
+        rule["actions"].append({"action": "price_match_check", "params": {}})
+    elif slots.get("discount_pct") is not None:
+        rule["actions"].append({"action": "apply_discount", "params": {"value": float(slots["discount_pct"]), "type": "percent"}})
+    else:
+        # last resort: if intent indicates blocking or manual override, try to map
+        if intent and ("block" in str(intent).lower() or "no_discount" in str(intent).lower()):
+            rule["actions"].append({"action": "block_discount", "params": {}})
+        else:
+            rule["actions"].append({"action": "no_action", "params": {}})
 
-    # Build actions using slots/attrs if available
-    # (keep your existing action-building logic; example below shows a common pattern)
-    if isinstance(attrs, dict):
-        if "discount_pct" in attrs:
-            rule_json["actions"].append({
-                "action": "apply_discount",
-                "params": {"value": float(attrs["discount_pct"]), "type": "percent"}
-            })
+    return {"intent": intent, "slots": slots, "rule": rule}
 
-    # final return: include intent and slots for UI clarity
-    out = {
-        "intent": intent,
-        "slots": attrs if isinstance(attrs, dict) else {},
-        "rule": rule_json
-    }
-    return out
+    # price-match condition enhancement
+    _proof_words_re = re.compile(r"\b(proof|evidence|screenshot|photo|image|url|link)\b", re.I)
+    _competitor_words_re = re.compile(r"\b(competitor|competitors|cheaper|lower price|lower than us|lower than)\b", re.I)
 
+    # decide price-match condition (improve rule)
+    price_match_condition = None
+    if price_match_flag:
+        if _proof_words_re.search(text):
+            # require the customer to provide proof / link
+            # some executors prefer explicit existence; here we use != "" so executor can check non-empty string
+            price_match_condition = {"attribute": "match_price_proof", "operator": "!=", "value": ""}
+        elif _competitor_words_re.search(text):
+            # require competitor price to be lower than our price
+            price_match_condition = {"attribute": "competitor_price", "operator": "<", "value": "price"}
+        else:
+            # no explicit indicator in text; keep no extra condition (or choose a default)
+            price_match_condition = None
 
-if __name__ == "__main__":
-    text = "Give 10% discount on flights booked 30 days before travel."
-    out = synthesize_rule(text)
-    print(json.dumps(out, indent=2))
+    # when adding actions below, include the condition if present
+    # example usage when building rule["conditions"]:
+    if price_match_flag:
+        if price_match_condition:
+            rule["conditions"].append(price_match_condition)
+        # add the action (unchanged)
+        rule["actions"].append({"action": "price_match_check", "params": {}})
+
